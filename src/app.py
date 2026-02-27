@@ -10,6 +10,10 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
 import os
 from pathlib import Path
+from typing import List
+
+import strawberry
+from strawberry.fastapi import GraphQLRouter
 
 app = FastAPI(title="Mergington High School API",
               description="API for viewing and signing up for extracurricular activities")
@@ -130,3 +134,61 @@ def unregister_from_activity(activity_name: str, email: str):
     # Remove student
     activity["participants"].remove(email)
     return {"message": f"Unregistered {email} from {activity_name}"}
+
+
+# --- GraphQL Types and Schema (basic) ---
+
+
+@strawberry.type
+class ActivityType:
+    name: str
+    description: str
+    schedule: str
+    max_participants: int
+    participants: List[str]
+
+
+def activity_to_type(name: str, data: dict) -> ActivityType:
+    return ActivityType(
+        name=name,
+        description=data.get("description", ""),
+        schedule=data.get("schedule", ""),
+        max_participants=data.get("max_participants", 0),
+        participants=data.get("participants", []),
+    )
+
+
+@strawberry.type
+class Query:
+    @strawberry.field
+    def activities(self) -> List[ActivityType]:
+        return [activity_to_type(name, data) for name, data in activities.items()]
+
+
+@strawberry.type
+class Mutation:
+    @strawberry.mutation
+    def signup(self, activity_name: str, email: str) -> str:
+        if activity_name not in activities:
+            raise HTTPException(status_code=404, detail="Activity not found")
+        activity = activities[activity_name]
+        if email in activity["participants"]:
+            raise HTTPException(status_code=400, detail="Student is already signed up")
+        activity["participants"].append(email)
+        return f"Signed up {email} for {activity_name}"
+
+    @strawberry.mutation
+    def unregister(self, activity_name: str, email: str) -> str:
+        if activity_name not in activities:
+            raise HTTPException(status_code=404, detail="Activity not found")
+        activity = activities[activity_name]
+        if email not in activity["participants"]:
+            raise HTTPException(status_code=400, detail="Student is not signed up for this activity")
+        activity["participants"].remove(email)
+        return f"Unregistered {email} from {activity_name}"
+
+
+schema = strawberry.Schema(query=Query, mutation=Mutation)
+graphql_app = GraphQLRouter(schema)
+app.include_router(graphql_app, prefix="/graphql")
+
